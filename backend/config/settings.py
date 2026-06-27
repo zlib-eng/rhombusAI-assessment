@@ -38,12 +38,14 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "corsheaders",
     "rest_framework",
     "django_redis",
     "apps.jobs",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -144,3 +146,8 @@ CELERY_TASK_SERIALIZER = 'json'
 
 # Shared file path — both Django and Celery worker containers mount this
 SHARED_FILES_PATH = config('SHARED_FILES_PATH', default='/shared/files')
+
+# Allow React's dev server to call Django
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+]
