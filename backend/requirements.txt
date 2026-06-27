@@ -1,0 +1,7 @@
+django>=4.2
+djangorestframework
+psycopg2-binary
+redis
+celery[redis]
+django-redis
+python-decouple
