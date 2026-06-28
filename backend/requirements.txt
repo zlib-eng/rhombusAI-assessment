@@ -6,3 +6,5 @@ celery[redis]
 django-redis
 python-decouple
 django-cors-headers
+pandas
+openpyxl
