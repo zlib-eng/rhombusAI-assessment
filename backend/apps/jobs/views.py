@@ -14,6 +14,74 @@ import pandas as pd
 from celery.app.control import Control
 import celery
 
+class JobResultsView(APIView):
+    """
+    GET /api/jobs/{id}/results/?page=0
+    Returns one page of processed results from the Parquet output.
+    Page numbering is zero-based.
+    """
+    PAGE_SIZE = 100
+
+    def get(self, request, job_id):
+        try:
+            job = Job.objects.get(id=job_id)
+        except Job.DoesNotExist:
+            return Response(
+                {'error': 'Job not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if job.status != Job.Status.SUCCESS:
+            return Response(
+                {'error': f'Results not available. Job status: {job.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not job.output_path:
+            return Response(
+                {'error': 'No output file found for this job'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            page = int(request.query_params.get('page', 0))
+
+            # pandas.read_parquet handles a directory of part files
+            # automatically — we don't need to worry about how many
+            # files Spark created.
+            df = pd.read_parquet(job.output_path)
+
+            total_rows = len(df)
+            total_pages = max(1, (total_rows + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+
+            if page < 0 or page >= total_pages:
+                return Response(
+                    {'error': f'Page {page} out of range. Valid range: 0 to {total_pages - 1}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            start = page * self.PAGE_SIZE
+            end = start + self.PAGE_SIZE
+            page_df = df.iloc[start:end]
+
+            # Replace NaN with None so it serialises to JSON null
+            rows = page_df.where(pd.notnull(page_df), None).to_dict(orient='records')
+
+            return Response({
+                'rows': rows,
+                'columns': list(df.columns),
+                'total_rows': total_rows,
+                'total_pages': total_pages,
+                'page': page,
+                'page_size': self.PAGE_SIZE,
+            })
+
+        except Exception as e:
+            return Response(
+                {'error': f'Could not read results: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 class JobCancelView(APIView):
     """
     POST /api/jobs/{id}/cancel/

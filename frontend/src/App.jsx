@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 
 const API_BASE = 'http://localhost:8000/api'
-const POLL_INTERVAL_MS = 2000  // Poll every 2 seconds
+const POLL_INTERVAL_MS = 2000
 
 function App() {
   // Form state
@@ -14,27 +14,25 @@ function App() {
 
   // Job state
   const [jobId, setJobId] = useState(null)
-  const [jobStatus, setJobStatus] = useState(null)  // QUEUED, RUNNING, SUCCESS, FAILED, CANCELLED
+  const [jobStatus, setJobStatus] = useState(null)
   const [jobProgress, setJobProgress] = useState(0)
   const [jobError, setJobError] = useState(null)
+
+  // Results state
+  const [results, setResults] = useState(null)
+  const [currentPage, setCurrentPage] = useState(0)
+  const [isLoadingResults, setIsLoadingResults] = useState(false)
 
   // UI state
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState(null)
 
-  // Ref to store the polling interval so we can clear it
-  // useRef persists across renders without causing re-renders itself
   const pollingRef = useRef(null)
 
-  // ---------------------------------------------------------------
-  // POLLING LOGIC
-  // Starts when we have a jobId, stops when the job reaches a
-  // terminal state (SUCCESS, FAILED, CANCELLED).
-  // ---------------------------------------------------------------
+  // ── Polling ────────────────────────────────────────────────────
   useEffect(() => {
     if (!jobId) return
 
-    // Start polling immediately, then repeat every POLL_INTERVAL_MS
     const poll = async () => {
       try {
         const response = await fetch(`${API_BASE}/jobs/${jobId}/status/`)
@@ -42,35 +40,50 @@ function App() {
 
         setJobStatus(data.status)
         setJobProgress(data.progress)
+        if (data.error_message) setJobError(data.error_message)
 
-        if (data.error_message) {
-          setJobError(data.error_message)
-        }
-
-        // Stop polling when the job reaches a terminal state
         const terminalStates = ['SUCCESS', 'FAILED', 'CANCELLED']
         if (terminalStates.includes(data.status)) {
           clearInterval(pollingRef.current)
-        }
 
+          // Automatically fetch page 0 when job succeeds
+          if (data.status === 'SUCCESS') {
+            fetchResults(0)
+          }
+        }
       } catch (err) {
-        // Network error during polling — log it but keep polling.
-        // A single failed poll shouldn't stop the whole process.
         console.error('Polling error:', err)
       }
     }
 
-    // Poll immediately on mount, then on interval
     poll()
     pollingRef.current = setInterval(poll, POLL_INTERVAL_MS)
-
-    // Cleanup: clear interval when component unmounts or jobId changes
     return () => clearInterval(pollingRef.current)
   }, [jobId])
 
-  // ---------------------------------------------------------------
-  // FILE SELECTION — reads columns immediately on file pick
-  // ---------------------------------------------------------------
+  // ── Fetch a page of results ────────────────────────────────────
+  const fetchResults = async (page) => {
+    if (!jobId) return
+    setIsLoadingResults(true)
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/jobs/${jobId}/results/?page=${page}`
+      )
+      const data = await response.json()
+
+      if (!response.ok) throw new Error(data.error)
+
+      setResults(data)
+      setCurrentPage(page)
+    } catch (err) {
+      setJobError(`Could not load results: ${err.message}`)
+    } finally {
+      setIsLoadingResults(false)
+    }
+  }
+
+  // ── File selection ─────────────────────────────────────────────
   const handleFileChange = async (e) => {
     const selectedFile = e.target.files[0]
     if (!selectedFile) return
@@ -90,12 +103,10 @@ function App() {
         body: formData,
       })
       const data = await response.json()
-
-      if (!response.ok) throw new Error(data.error || 'Could not read columns')
+      if (!response.ok) throw new Error(data.error)
 
       setAvailableColumns(data.columns)
       if (data.columns.length > 0) setTargetColumn(data.columns[0])
-
     } catch (err) {
       setFormError(`Could not read file: ${err.message}`)
       setFile(null)
@@ -104,9 +115,7 @@ function App() {
     }
   }
 
-  // ---------------------------------------------------------------
-  // FORM SUBMISSION
-  // ---------------------------------------------------------------
+  // ── Form submission ────────────────────────────────────────────
   const handleSubmit = async () => {
     if (!file || !nlPrompt || !targetColumn || !replacementValue) {
       setFormError('Please fill in all fields and select a file.')
@@ -119,6 +128,7 @@ function App() {
     setJobStatus(null)
     setJobProgress(0)
     setJobError(null)
+    setResults(null)
 
     const formData = new FormData()
     formData.append('file', file)
@@ -132,12 +142,9 @@ function App() {
         body: formData,
       })
       const data = await response.json()
-
       if (!response.ok) throw new Error(data.error || JSON.stringify(data))
 
-      // Setting jobId triggers the useEffect polling loop above
       setJobId(data.id)
-
     } catch (err) {
       setFormError(err.message)
     } finally {
@@ -145,30 +152,20 @@ function App() {
     }
   }
 
-  // ---------------------------------------------------------------
-  // CANCELLATION
-  // ---------------------------------------------------------------
+  // ── Cancellation ───────────────────────────────────────────────
   const handleCancel = async () => {
     if (!jobId) return
-
     try {
-      await fetch(`${API_BASE}/jobs/${jobId}/cancel/`, {
-        method: 'POST',
-      })
-      // Polling loop will detect CANCELLED status on next poll
-      // and stop itself automatically
+      await fetch(`${API_BASE}/jobs/${jobId}/cancel/`, { method: 'POST' })
     } catch (err) {
       console.error('Cancel error:', err)
     }
   }
 
-  // ---------------------------------------------------------------
-  // STATUS PANEL — shown while a job is running or complete
-  // ---------------------------------------------------------------
+  // ── Render helpers ─────────────────────────────────────────────
   const renderJobStatus = () => {
     if (!jobId) return null
 
-    const isTerminal = ['SUCCESS', 'FAILED', 'CANCELLED'].includes(jobStatus)
     const isRunning = ['QUEUED', 'RUNNING'].includes(jobStatus)
 
     return (
@@ -179,19 +176,17 @@ function App() {
         borderRadius: '8px'
       }}>
         <h3 style={{ marginTop: 0 }}>Job Status</h3>
-
         <p>
           <strong>ID:</strong> {jobId}<br />
           <strong>Status:</strong> {jobStatus || 'Loading...'}
         </p>
 
-        {/* Progress bar */}
         <div style={{
           background: '#eee',
           borderRadius: '4px',
           height: '20px',
           overflow: 'hidden',
-          marginBottom: '1rem'
+          marginBottom: '0.5rem'
         }}>
           <div style={{
             background: jobStatus === 'FAILED' ? '#e55' :
@@ -201,11 +196,8 @@ function App() {
             transition: 'width 0.3s ease',
           }} />
         </div>
-        <p style={{ textAlign: 'center', margin: '-0.5rem 0 1rem' }}>
-          {jobProgress}%
-        </p>
+        <p style={{ textAlign: 'center', margin: '0 0 1rem' }}>{jobProgress}%</p>
 
-        {/* Cancel button — only shown while job is active */}
         {isRunning && (
           <button
             onClick={handleCancel}
@@ -222,21 +214,12 @@ function App() {
           </button>
         )}
 
-        {/* Error message */}
         {jobError && (
           <div style={{ color: 'red', marginTop: '1rem' }}>
             Error: {jobError}
           </div>
         )}
 
-        {/* Success message */}
-        {jobStatus === 'SUCCESS' && (
-          <div style={{ color: 'green', marginTop: '1rem' }}>
-            ✅ Job completed successfully. Results will appear here in Step 4.
-          </div>
-        )}
-
-        {/* Cancelled message */}
         {jobStatus === 'CANCELLED' && (
           <div style={{ color: '#888', marginTop: '1rem' }}>
             Job was cancelled.
@@ -246,11 +229,104 @@ function App() {
     )
   }
 
-  // ---------------------------------------------------------------
-  // RENDER
-  // ---------------------------------------------------------------
+  const renderResults = () => {
+    if (!results) return null
+
+    const { rows, columns, total_rows, total_pages, page } = results
+
+    return (
+      <div style={{ marginTop: '2rem' }}>
+        <h3>
+          Results — {total_rows.toLocaleString()} rows total
+        </h3>
+
+        {/* Pagination controls */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '1rem',
+          marginBottom: '1rem'
+        }}>
+          <button
+            onClick={() => fetchResults(page - 1)}
+            disabled={page === 0 || isLoadingResults}
+            style={{ padding: '0.4rem 0.8rem' }}
+          >
+            ← Previous
+          </button>
+
+          <span>Page {page + 1} of {total_pages}</span>
+
+          <button
+            onClick={() => fetchResults(page + 1)}
+            disabled={page >= total_pages - 1 || isLoadingResults}
+            style={{ padding: '0.4rem 0.8rem' }}
+          >
+            Next →
+          </button>
+        </div>
+
+        {isLoadingResults && <p>Loading...</p>}
+
+        {/* Data table */}
+        {rows.length === 0 ? (
+          <p style={{ color: '#888' }}>No rows found on this page.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: '0.9rem'
+            }}>
+              <thead>
+                <tr>
+                  {columns.map((col) => (
+                    <th key={col} style={{
+                      padding: '0.5rem',
+                      background: '#f0f0f0',
+                      border: '1px solid #ddd',
+                      textAlign: 'left',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, rowIndex) => (
+                  <tr key={rowIndex} style={{
+                    background: rowIndex % 2 === 0 ? 'white' : '#fafafa'
+                  }}>
+                    {columns.map((col) => (
+                      <td key={col} style={{
+                        padding: '0.4rem 0.5rem',
+                        border: '1px solid #ddd',
+                        maxWidth: '200px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {row[col] === null ? (
+                          <span style={{ color: '#aaa' }}>null</span>
+                        ) : (
+                          String(row[col])
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Main render ────────────────────────────────────────────────
   return (
-    <div style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
+    <div style={{ padding: '2rem', maxWidth: '900px', margin: '0 auto' }}>
       <h1>RhombusAI — Data Processor</h1>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -330,6 +406,7 @@ function App() {
       </div>
 
       {renderJobStatus()}
+      {renderResults()}
 
     </div>
   )

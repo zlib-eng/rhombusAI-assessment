@@ -1,6 +1,7 @@
-import time
+import os
 from celery import shared_task
 from celery.utils.log import get_task_logger
+from django.conf import settings
 
 from .models import Job
 
@@ -14,22 +15,11 @@ logger = get_task_logger(__name__)
 )
 def process_file_task(self, job_id):
     """
-    The main processing task. In this step it fakes work by sleeping.
-    In Step 4 this will be replaced with real PySpark processing.
-
-    bind=True gives us access to `self` — the task instance.
-    This lets us call self.update_state() and self.retry().
-
-    max_retries=3 — if the task raises an exception, Celery
-    will retry it up to 3 times before marking it FAILED.
-
-    default_retry_delay=5 — wait 5 seconds before the first retry.
-    Combined with exponential backoff below, retries wait
-    5s, 25s, 125s before giving up.
+    Processes an uploaded file using PySpark.
+    Reads the file, applies a regex transformation,
+    and writes the result to Parquet.
     """
 
-    # Step 1: Load the Job from the database.
-    # If the job doesn't exist, fail immediately — no point retrying.
     try:
         job = Job.objects.get(id=job_id)
     except Job.DoesNotExist:
@@ -37,79 +27,106 @@ def process_file_task(self, job_id):
         return
 
     logger.info(f"Starting job {job_id}")
+    spark = None
 
     try:
-        # Step 2: Mark the job as RUNNING in PostgreSQL
-        # and report 0% progress to Redis.
+        # Mark as RUNNING
         job.status = Job.Status.RUNNING
         job.progress = 0
         job.save(update_fields=['status', 'progress', 'updated_at'])
-
         _update_progress(self, job, 0)
 
-        # ----------------------------------------------------------------
-        # FAKE WORK — this entire block gets replaced in Step 4
-        # with real PySpark processing.
-        # For now we just sleep and update progress in stages.
-        # ----------------------------------------------------------------
-        stages = [
-            (10,  "Reading file"),
-            (30,  "Generating regex from prompt"),
-            (60,  "Applying transformation"),
-            (85,  "Writing output"),
-            (100, "Complete"),
-        ]
+        # ── Stage 1: Read the file ──────────────────────────────
+        _update_progress(self, job, 10)
+        logger.info(f"Job {job_id}: Reading file (10%)")
 
-        for progress_value, stage_name in stages:
-            # Check if the job was cancelled before doing the next stage.
-            # Re-read from the database to get the latest status.
-            job.refresh_from_db()
-            if job.status == Job.Status.CANCELLED:
-                logger.info(f"Job {job_id} was cancelled, stopping")
-                return
+        job.refresh_from_db()
+        if job.status == Job.Status.CANCELLED:
+            logger.info(f"Job {job_id} cancelled before reading")
+            return
 
-            logger.info(f"Job {job_id}: {stage_name} ({progress_value}%)")
+        from .spark_utils import (
+            get_spark_session,
+            read_file,
+            apply_regex_transformation,
+            write_output,
+        )
 
-            # Update progress in both Redis and PostgreSQL
-            _update_progress(self, job, progress_value)
-            # Simulate work taking time
-            time.sleep(3)
-        # ----------------------------------------------------------------
+        spark = get_spark_session()
+        df = read_file(spark, job.input_file_path)
+        row_count = df.count()
+        logger.info(f"Job {job_id}: Read {row_count} rows")
 
-        # Step 3: Mark the job as SUCCESS.
+        # ── Stage 2: Apply transformation ───────────────────────
+        _update_progress(self, job, 50)
+        logger.info(f"Job {job_id}: Applying transformation (50%)")
+
+        job.refresh_from_db()
+        if job.status == Job.Status.CANCELLED:
+            logger.info(f"Job {job_id} cancelled before transformation")
+            return
+
+        # HARDCODED regex for Step 4.
+        # Replaced with LLM-generated pattern in Step 5.
+        hardcoded_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,7}\b'
+
+        df_transformed = apply_regex_transformation(
+            df,
+            job.target_column,
+            hardcoded_pattern,
+            job.replacement_value,
+        )
+
+        # ── Stage 3: Write output ────────────────────────────────
+        _update_progress(self, job, 85)
+        logger.info(f"Job {job_id}: Writing output (85%)")
+
+        job.refresh_from_db()
+        if job.status == Job.Status.CANCELLED:
+            logger.info(f"Job {job_id} cancelled before writing")
+            return
+
+        output_path = os.path.join(
+            settings.SHARED_FILES_PATH,
+            'output',
+            str(job.id)
+        )
+        write_output(df_transformed, output_path)
+
+        # ── Stage 4: Complete ────────────────────────────────────
         job.status = Job.Status.SUCCESS
         job.progress = 100
-        job.save(update_fields=['status', 'progress', 'updated_at'])
+        job.output_path = output_path
+        job.save(update_fields=['status', 'progress', 'output_path', 'updated_at'])
+        _update_progress(self, job, 100)
 
-        logger.info(f"Job {job_id} completed successfully")
+        logger.info(f"Job {job_id} completed — {row_count} rows processed")
 
     except Exception as exc:
-        # Something unexpected went wrong.
-        # Try to retry with exponential backoff.
-        # If we've hit max_retries, mark the job as FAILED.
         logger.error(f"Job {job_id} failed: {exc}")
 
         try:
-            # exponential=True means wait 5s, then 25s, then 125s
-            raise self.retry(exc=exc, countdown=5 ** (self.request.retries + 1))
-
+            raise self.retry(
+                exc=exc,
+                countdown=5 ** (self.request.retries + 1)
+            )
         except self.MaxRetriesExceededError:
-            # We've used all our retries — give up and mark as FAILED
             job.status = Job.Status.FAILED
             job.error_message = str(exc)
             job.save(update_fields=['status', 'error_message', 'updated_at'])
 
+    finally:
+        # Always stop the SparkSession when the task ends.
+        # Leaving it running would hold JVM resources indefinitely.
+        if spark:
+            try:
+                spark.stop()
+            except Exception:
+                pass
+
 
 def _update_progress(task, job, progress_value):
-    """
-    Helper that updates progress in two places simultaneously:
-
-    1. Redis — via Celery's update_state(). This is what the
-       polling endpoint reads in real time.
-
-    2. PostgreSQL — via the Job model. This is the durable record.
-       If Redis restarts, the last known progress is still in the DB.
-    """
+    """Updates progress in Redis (live) and PostgreSQL (durable)."""
     task.update_state(
         state='PROGRESS',
         meta={
@@ -117,6 +134,5 @@ def _update_progress(task, job, progress_value):
             'job_id': str(job.id),
         }
     )
-
     job.progress = progress_value
     job.save(update_fields=['progress', 'updated_at'])
