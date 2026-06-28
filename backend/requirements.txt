@@ -8,3 +8,5 @@ python-decouple
 django-cors-headers
 pandas
 openpyxl
+pyspark
+pyarrow

@@ -43,8 +43,10 @@ services:
         condition: service_healthy
 
   worker:
-    build: ./backend
-    command: celery -A config worker --loglevel=info
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    command: celery -A config worker --loglevel=info --concurrency 2 # concurrency limit
     volumes:
       - ./backend:/app
       - shared_files:/shared/files        # <-- same shared volume mounted here

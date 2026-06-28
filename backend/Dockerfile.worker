@@ -1,0 +1,31 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies.
+# default-jdk-headless installs Java without GUI components — 
+# smaller than default-jdk, sufficient for PySpark.
+# procps is needed by Spark for process management.
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    default-jdk-headless \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tell PySpark where Java lives
+ENV JAVA_HOME=/usr/lib/jvm/default-java
+ENV PATH=$JAVA_HOME/bin:$PATH
+
+# Tell PySpark which Python to use
+ENV PYSPARK_PYTHON=python3
+ENV PYSPARK_DRIVER_PYTHON=python3
+
+# Prevent Spark from trying to resolve the container hostname
+# which causes network errors inside Docker
+ENV SPARK_LOCAL_IP=127.0.0.1
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
