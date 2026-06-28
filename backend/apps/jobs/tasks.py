@@ -70,11 +70,10 @@ def process_file_task(self, job_id):
 
             logger.info(f"Job {job_id}: {stage_name} ({progress_value}%)")
 
-            # Simulate work taking time
-            time.sleep(3)
-
             # Update progress in both Redis and PostgreSQL
             _update_progress(self, job, progress_value)
+            # Simulate work taking time
+            time.sleep(3)
         # ----------------------------------------------------------------
 
         # Step 3: Mark the job as SUCCESS.
