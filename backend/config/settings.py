@@ -57,6 +57,8 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "config.urls"
 
+GEMINI_API_KEY = config('GEMINI_API_KEY')
+
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",

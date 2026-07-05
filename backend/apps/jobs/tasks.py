@@ -4,6 +4,7 @@ from celery.utils.log import get_task_logger
 from django.conf import settings
 
 from .models import Job
+from .llm_utils import get_regex_pattern, RegexGenerationError
 
 logger = get_task_logger(__name__)
 
@@ -14,12 +15,6 @@ logger = get_task_logger(__name__)
     default_retry_delay=5,
 )
 def process_file_task(self, job_id):
-    """
-    Processes an uploaded file using PySpark.
-    Reads the file, applies a regex transformation,
-    and writes the result to Parquet.
-    """
-
     try:
         job = Job.objects.get(id=job_id)
     except Job.DoesNotExist:
@@ -30,7 +25,6 @@ def process_file_task(self, job_id):
     spark = None
 
     try:
-        # Mark as RUNNING
         job.status = Job.Status.RUNNING
         job.progress = 0
         job.save(update_fields=['status', 'progress', 'updated_at'])
@@ -57,27 +51,46 @@ def process_file_task(self, job_id):
         row_count = df.count()
         logger.info(f"Job {job_id}: Read {row_count} rows")
 
-        # ── Stage 2: Apply transformation ───────────────────────
-        _update_progress(self, job, 50)
-        logger.info(f"Job {job_id}: Applying transformation (50%)")
+        # ── Stage 2: Generate regex from the prompt ─────────────
+        _update_progress(self, job, 30)
+        logger.info(f"Job {job_id}: Generating regex from prompt (30%)")
+
+        job.refresh_from_db()
+        if job.status == Job.Status.CANCELLED:
+            logger.info(f"Job {job_id} cancelled before regex generation")
+            return
+
+        try:
+            pattern = get_regex_pattern(job.nl_prompt)
+        except RegexGenerationError as e:
+            # This is a permanent failure — the prompt produced an
+            # unusable pattern. Retrying won't help, so fail immediately
+            # instead of going through the retry/backoff cycle.
+            logger.error(f"Job {job_id}: regex generation failed — {e}")
+            job.status = Job.Status.FAILED
+            job.error_message = str(e)
+            job.save(update_fields=['status', 'error_message', 'updated_at'])
+            return
+
+        logger.info(f"Job {job_id}: Using pattern '{pattern}'")
+
+        # ── Stage 3: Apply transformation ───────────────────────
+        _update_progress(self, job, 60)
+        logger.info(f"Job {job_id}: Applying transformation (60%)")
 
         job.refresh_from_db()
         if job.status == Job.Status.CANCELLED:
             logger.info(f"Job {job_id} cancelled before transformation")
             return
 
-        # HARDCODED regex for Step 4.
-        # Replaced with LLM-generated pattern in Step 5.
-        hardcoded_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,7}\b'
-
         df_transformed = apply_regex_transformation(
             df,
             job.target_column,
-            hardcoded_pattern,
+            pattern,
             job.replacement_value,
         )
 
-        # ── Stage 3: Write output ────────────────────────────────
+        # ── Stage 4: Write output ────────────────────────────────
         _update_progress(self, job, 85)
         logger.info(f"Job {job_id}: Writing output (85%)")
 
@@ -93,7 +106,7 @@ def process_file_task(self, job_id):
         )
         write_output(df_transformed, output_path)
 
-        # ── Stage 4: Complete ────────────────────────────────────
+        # ── Stage 5: Complete ────────────────────────────────────
         job.status = Job.Status.SUCCESS
         job.progress = 100
         job.output_path = output_path
@@ -103,6 +116,8 @@ def process_file_task(self, job_id):
         logger.info(f"Job {job_id} completed — {row_count} rows processed")
 
     except Exception as exc:
+        # Anything NOT caught above — network errors calling the LLM,
+        # unexpected Spark failures, etc. These are worth retrying.
         logger.error(f"Job {job_id} failed: {exc}")
 
         try:
@@ -116,8 +131,6 @@ def process_file_task(self, job_id):
             job.save(update_fields=['status', 'error_message', 'updated_at'])
 
     finally:
-        # Always stop the SparkSession when the task ends.
-        # Leaving it running would hold JVM resources indefinitely.
         if spark:
             try:
                 spark.stop()
@@ -126,7 +139,6 @@ def process_file_task(self, job_id):
 
 
 def _update_progress(task, job, progress_value):
-    """Updates progress in Redis (live) and PostgreSQL (durable)."""
     task.update_state(
         state='PROGRESS',
         meta={

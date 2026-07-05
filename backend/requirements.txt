@@ -10,3 +10,4 @@ pandas
 openpyxl
 pyspark
 pyarrow
+google-genai
