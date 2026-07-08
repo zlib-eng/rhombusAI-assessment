@@ -21,12 +21,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-nd@)ic4+dfa4l@g4i*syxo+i&qe1ch)#w@mf6xpz73n4-de#ov"
-
+SECRET_KEY = config('DJANGO_SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DJANGO_DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = config('DJANGO_ALLOWED_HOSTS', default='localhost').split(',')
 
 
 # Application definition
@@ -155,4 +154,5 @@ SHARED_FILES_PATH = config('SHARED_FILES_PATH', default='/shared/files')
 # Allow React's dev server to call Django
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
+    'http://3.106.244.151:5173',
 ]
