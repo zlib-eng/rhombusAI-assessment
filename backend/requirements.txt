@@ -11,3 +11,4 @@ openpyxl
 pyspark
 pyarrow
 google-genai
+gunicorn

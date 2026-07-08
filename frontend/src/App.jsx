@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = 'http://3.106.244.151:8000/api'
 const POLL_INTERVAL_MS = 2000
 
 function App() {
