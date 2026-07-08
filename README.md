@@ -110,7 +110,7 @@ Scaling to a genuine multi-node cluster would require changing one configuration
 
 Then:
 
-    4. docker compose up --build
+    4. docker compose up --build -d
     5. docker compose exec web python manage.py migrate
     6. docker compose exec web python manage.py createsuperuser
 
