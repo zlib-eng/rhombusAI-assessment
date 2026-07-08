@@ -69,6 +69,20 @@ services:
     depends_on:
       - web
 
+
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    command: celery -A config flower --port=5555 --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+
+    
 volumes:
   postgres_data:
   shared_files:                           # <-- named volume Docker manages

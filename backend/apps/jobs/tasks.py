@@ -4,7 +4,14 @@ from celery.utils.log import get_task_logger
 from django.conf import settings
 
 from .models import Job
-from .llm_utils import get_regex_pattern, RegexGenerationError
+from .llm_utils import TransformationSpecError
+from .spark_utils import (
+    get_spark_session,
+    read_file,
+    write_output,
+    ColumnNotFoundError,
+)
+from .transformations.registry import get_transformation
 
 logger = get_task_logger(__name__)
 
@@ -21,7 +28,7 @@ def process_file_task(self, job_id):
         logger.error(f"Job {job_id} not found in database")
         return
 
-    logger.info(f"Starting job {job_id}")
+    logger.info(f"Starting job {job_id} — type: {job.transformation_type}")
     spark = None
 
     try:
@@ -39,41 +46,35 @@ def process_file_task(self, job_id):
             logger.info(f"Job {job_id} cancelled before reading")
             return
 
-        from .spark_utils import (
-            get_spark_session,
-            read_file,
-            apply_regex_transformation,
-            write_output,
-            ColumnNotFoundError,
-        )
-
         spark = get_spark_session()
         df = read_file(spark, job.input_file_path)
         row_count = df.count()
         logger.info(f"Job {job_id}: Read {row_count} rows")
 
-        # ── Stage 2: Generate regex from the prompt ─────────────
+        # ── Stage 2: Generate the transformation spec ───────────
         _update_progress(self, job, 30)
-        logger.info(f"Job {job_id}: Generating regex from prompt (30%)")
+        logger.info(f"Job {job_id}: Generating spec from prompt (30%)")
 
         job.refresh_from_db()
         if job.status == Job.Status.CANCELLED:
-            logger.info(f"Job {job_id} cancelled before regex generation")
+            logger.info(f"Job {job_id} cancelled before spec generation")
             return
 
+        transformation = get_transformation(job.transformation_type)
+
         try:
-            pattern = get_regex_pattern(job.nl_prompt)
-        except RegexGenerationError as e:
-            # Permanent failure — the prompt produced an unusable
-            # pattern. Retrying won't help, so fail immediately
-            # instead of going through the retry/backoff cycle.
-            logger.error(f"Job {job_id}: regex generation failed — {e}")
+            spec = transformation.generate_spec(job.nl_prompt)
+        except TransformationSpecError as e:
+            # Permanent failure regardless of WHICH transformation type
+            # raised it — retrying the same prompt won't produce a
+            # different result. Fail immediately, no retry/backoff.
+            logger.error(f"Job {job_id}: spec generation failed — {e}")
             job.status = Job.Status.FAILED
             job.error_message = str(e)
             job.save(update_fields=['status', 'error_message', 'updated_at'])
             return
 
-        logger.info(f"Job {job_id}: Using pattern '{pattern}'")
+        logger.info(f"Job {job_id}: Using spec {spec}")
 
         # ── Stage 3: Apply transformation ───────────────────────
         _update_progress(self, job, 60)
@@ -85,17 +86,10 @@ def process_file_task(self, job_id):
             return
 
         try:
-            df_transformed = apply_regex_transformation(
-                df,
-                job.target_column,
-                pattern,
-                job.replacement_value,
-            )
+            df_transformed = transformation.apply(df, job.target_column, spec, job)
         except ColumnNotFoundError as e:
-            # Also a permanent failure — the column will never exist
-            # no matter how many times we retry the same job. Fail
-            # immediately rather than burning through backoff delays
-            # (5s, 25s, 125s) on a guaranteed repeat failure.
+            # Also permanent — the column will never exist no matter
+            # how many times we retry this exact job.
             logger.error(f"Job {job_id}: column error — {e}")
             job.status = Job.Status.FAILED
             job.error_message = str(e)
@@ -128,8 +122,6 @@ def process_file_task(self, job_id):
         logger.info(f"Job {job_id} completed — {row_count} rows processed")
 
     except Exception as exc:
-        # Anything NOT caught above — network errors calling the LLM,
-        # unexpected Spark failures, etc. These are worth retrying.
         logger.error(f"Job {job_id} failed: {exc}")
 
         try:

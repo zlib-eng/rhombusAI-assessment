@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 
-const API_BASE = 'http://3.106.244.151:8000/api'
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api'
 const POLL_INTERVAL_MS = 2000
+
+const TRANSFORMATION_TYPES = {
+  FIND_REPLACE: 'Find and Replace',
+  EXTRACT: 'Extract to New Column',
+  STANDARDIZE_FORMAT: 'Standardize Format',
+}
 
 function App() {
   // Form state
@@ -9,6 +15,8 @@ function App() {
   const [nlPrompt, setNlPrompt] = useState('')
   const [targetColumn, setTargetColumn] = useState('')
   const [replacementValue, setReplacementValue] = useState('')
+  const [transformationType, setTransformationType] = useState('FIND_REPLACE')
+  const [outputColumnName, setOutputColumnName] = useState('')
   const [availableColumns, setAvailableColumns] = useState([])
   const [isLoadingColumns, setIsLoadingColumns] = useState(false)
 
@@ -29,13 +37,7 @@ function App() {
 
   const pollingRef = useRef(null)
 
-  // ── Helper: distinguishes "server unreachable" from other errors ──
-  // A TypeError with this exact message is what fetch() throws when
-  // the network request never even reached a server — DNS failure,
-  // server down, CORS block before headers arrive, no internet, etc.
-  // Every other error (4xx/5xx) is a real response from the server
-  // that we've already parsed as JSON, so its message is meaningful
-  // on its own.
+  // Distinguishes "server unreachable" from real server errors.
   const describeError = (err) => {
     if (err instanceof TypeError && err.message === 'Failed to fetch') {
       return 'Could not reach the server. Please check your connection and try again.'
@@ -59,14 +61,11 @@ function App() {
         const terminalStates = ['SUCCESS', 'FAILED', 'CANCELLED']
         if (terminalStates.includes(data.status)) {
           clearInterval(pollingRef.current)
-
           if (data.status === 'SUCCESS') {
             fetchResults(0)
           }
         }
       } catch (err) {
-        // A single failed poll shouldn't stop the whole process —
-        // log it and let the next scheduled poll try again.
         console.error('Polling error:', describeError(err))
       }
     }
@@ -98,7 +97,7 @@ function App() {
     }
   }
 
-  // ── File selection ─────────────────────────────────────────────
+  // ── File selection — reads columns immediately ─────────────────
   const handleFileChange = async (e) => {
     const selectedFile = e.target.files[0]
     if (!selectedFile) return
@@ -122,6 +121,10 @@ function App() {
 
       setAvailableColumns(data.columns)
       if (data.columns.length > 0) setTargetColumn(data.columns[0])
+
+      if (data.warning) {
+        setFormError(data.warning)
+      }
     } catch (err) {
       setFormError(`Could not read file: ${describeError(err)}`)
       setFile(null)
@@ -132,13 +135,19 @@ function App() {
 
   // ── Form submission ────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!file || !nlPrompt || !targetColumn || !replacementValue) {
+    if (!file || !nlPrompt || !targetColumn) {
       setFormError('Please fill in all fields and select a file.')
       return
     }
+    if (transformationType === 'FIND_REPLACE' && !replacementValue) {
+      setFormError('Please provide a replacement value.')
+      return
+    }
+    if (transformationType === 'EXTRACT' && !outputColumnName) {
+      setFormError('Please provide a name for the new column.')
+      return
+    }
 
-    // Guards against rapid double-clicks creating duplicate jobs
-    // while the first request is still in flight.
     if (isSubmitting) return
 
     setIsSubmitting(true)
@@ -153,7 +162,13 @@ function App() {
     formData.append('file', file)
     formData.append('nl_prompt', nlPrompt)
     formData.append('target_column', targetColumn)
-    formData.append('replacement_value', replacementValue)
+    formData.append('transformation_type', transformationType)
+    if (transformationType === 'FIND_REPLACE') {
+      formData.append('replacement_value', replacementValue)
+    }
+    if (transformationType === 'EXTRACT') {
+      formData.append('output_column_name', outputColumnName)
+    }
 
     try {
       const response = await fetch(`${API_BASE}/jobs/`, {
@@ -183,13 +198,11 @@ function App() {
         throw new Error(data.error || 'Could not cancel job')
       }
     } catch (err) {
-      // Surface this rather than swallowing it — a failed cancel
-      // attempt is something the user should know about.
       setJobError(`Cancel failed: ${describeError(err)}`)
     }
   }
 
-  // ── Render helpers ─────────────────────────────────────────────
+  // ── Render: job status panel ───────────────────────────────────
   const renderJobStatus = () => {
     if (!jobId) return null
 
@@ -205,7 +218,8 @@ function App() {
         <h3 style={{ marginTop: 0 }}>Job Status</h3>
         <p>
           <strong>ID:</strong> {jobId}<br />
-          <strong>Status:</strong> {jobStatus || 'Loading...'}
+          <strong>Status:</strong> {jobStatus || 'Loading...'}<br />
+          <strong>Type:</strong> {TRANSFORMATION_TYPES[transformationType]}
         </p>
 
         <div style={{
@@ -256,13 +270,12 @@ function App() {
     )
   }
 
+  // ── Render: results table ──────────────────────────────────────
   const renderResults = () => {
     if (!results) return null
 
     const { rows, columns, total_rows, total_pages, page } = results
 
-    // Empty-file case — job succeeded but there's genuinely nothing
-    // to show. Distinct from an error: nothing went wrong here.
     if (total_rows === 0) {
       return (
         <div style={{
@@ -283,7 +296,7 @@ function App() {
     return (
       <div style={{ marginTop: '2rem' }}>
         <h3>
-          Results — {total_rows.toLocaleString()} rows total
+          Results — {total_rows.toLocaleString()} row{total_rows !== 1 ? 's' : ''} total
         </h3>
 
         <div style={{
@@ -423,19 +436,52 @@ function App() {
         </div>
 
         <div>
-          <label>Replacement value</label><br />
-          <input
-            type="text"
-            placeholder="e.g. REDACTED"
-            value={replacementValue}
-            onChange={(e) => setReplacementValue(e.target.value)}
+          <label>Transformation type</label><br />
+          <select
+            value={transformationType}
+            onChange={(e) => setTransformationType(e.target.value)}
             style={{ width: '100%', padding: '0.5rem' }}
-          />
+          >
+            {Object.entries(TRANSFORMATION_TYPES).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
         </div>
+
+        {transformationType === 'FIND_REPLACE' && (
+          <div>
+            <label>Replacement value</label><br />
+            <input
+              type="text"
+              placeholder="e.g. REDACTED"
+              value={replacementValue}
+              onChange={(e) => setReplacementValue(e.target.value)}
+              style={{ width: '100%', padding: '0.5rem' }}
+            />
+          </div>
+        )}
+
+        {transformationType === 'EXTRACT' && (
+          <div>
+            <label>New column name</label><br />
+            <input
+              type="text"
+              placeholder="e.g. extracted_value"
+              value={outputColumnName}
+              onChange={(e) => setOutputColumnName(e.target.value)}
+              style={{ width: '100%', padding: '0.5rem' }}
+            />
+          </div>
+        )}
 
         <button
           onClick={handleSubmit}
-          disabled={isSubmitting || availableColumns.length === 0}
+          disabled={
+            isSubmitting ||
+            availableColumns.length === 0 ||
+            (transformationType === 'FIND_REPLACE' && !replacementValue) ||
+            (transformationType === 'EXTRACT' && !outputColumnName)
+          }
           style={{ padding: '0.75rem', cursor: 'pointer' }}
         >
           {isSubmitting ? 'Submitting...' : 'Submit Job'}

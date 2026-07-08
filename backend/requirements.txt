@@ -12,3 +12,4 @@ pyspark
 pyarrow
 google-genai
 gunicorn
+flower
