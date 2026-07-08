@@ -8,7 +8,8 @@ Natural language is converted to regex via an LLM, cached in Redis, and applied 
 
 ## Live Demo
 URL: http://3.106.244.151:5173
-Demo video: [embedded below — see Demo Video section]
+Demo video: [embedded below ]
+
 
 Two flows run concurrently. 
 The fast path is synchronous and takes milliseconds: 
@@ -169,3 +170,24 @@ Django + DRF · Celery · Redis · PySpark · PostgreSQL · React (Vite) · Goog
 ## Demo Video
 [Embed the video here — see recording guide]
 
+transform fail
+https://youtu.be/96AqT8GLidY 
+
+standardize format
+https://youtu.be/N5a5D-XcjDY
+
+
+paigination
+https://youtu.be/95OHsUBYWKc 
+
+million row
+https://youtu.be/_-ze8hXNIJs
+
+find replace 
+https://youtu.be/gaz6mX4spVg
+
+extract
+https://youtu.be/oFDHKSTfOeo
+
+cancelled
+https://youtu.be/Eovjzsk5MvQ 
