@@ -8,6 +8,20 @@ class Job(models.Model):
     Each attribute on the class becomes a column in the table.
     """
 
+    class TransformationType(models.TextChoices):
+        FIND_REPLACE = 'FIND_REPLACE', 'Find and Replace'
+        EXTRACT = 'EXTRACT', 'Extract to New Column'
+        STANDARDIZE_FORMAT = 'STANDARDIZE_FORMAT', 'Standardize Format'
+
+    transformation_type = models.CharField(
+        max_length=30,
+        choices=TransformationType.choices,
+        default=TransformationType.FIND_REPLACE
+    )
+
+    # Only used by EXTRACT — the name of the new column to create.
+    output_column_name = models.CharField(max_length=255, null=True, blank=True)
+
     class Status(models.TextChoices):
         QUEUED = 'QUEUED', 'Queued'
         RUNNING = 'RUNNING', 'Running'
