@@ -29,6 +29,20 @@ function App() {
 
   const pollingRef = useRef(null)
 
+  // ── Helper: distinguishes "server unreachable" from other errors ──
+  // A TypeError with this exact message is what fetch() throws when
+  // the network request never even reached a server — DNS failure,
+  // server down, CORS block before headers arrive, no internet, etc.
+  // Every other error (4xx/5xx) is a real response from the server
+  // that we've already parsed as JSON, so its message is meaningful
+  // on its own.
+  const describeError = (err) => {
+    if (err instanceof TypeError && err.message === 'Failed to fetch') {
+      return 'Could not reach the server. Please check your connection and try again.'
+    }
+    return err.message
+  }
+
   // ── Polling ────────────────────────────────────────────────────
   useEffect(() => {
     if (!jobId) return
@@ -46,13 +60,14 @@ function App() {
         if (terminalStates.includes(data.status)) {
           clearInterval(pollingRef.current)
 
-          // Automatically fetch page 0 when job succeeds
           if (data.status === 'SUCCESS') {
             fetchResults(0)
           }
         }
       } catch (err) {
-        console.error('Polling error:', err)
+        // A single failed poll shouldn't stop the whole process —
+        // log it and let the next scheduled poll try again.
+        console.error('Polling error:', describeError(err))
       }
     }
 
@@ -72,12 +87,12 @@ function App() {
       )
       const data = await response.json()
 
-      if (!response.ok) throw new Error(data.error)
+      if (!response.ok) throw new Error(data.error || 'Could not load results')
 
       setResults(data)
       setCurrentPage(page)
     } catch (err) {
-      setJobError(`Could not load results: ${err.message}`)
+      setJobError(`Could not load results: ${describeError(err)}`)
     } finally {
       setIsLoadingResults(false)
     }
@@ -103,12 +118,12 @@ function App() {
         body: formData,
       })
       const data = await response.json()
-      if (!response.ok) throw new Error(data.error)
+      if (!response.ok) throw new Error(data.error || 'Could not read columns')
 
       setAvailableColumns(data.columns)
       if (data.columns.length > 0) setTargetColumn(data.columns[0])
     } catch (err) {
-      setFormError(`Could not read file: ${err.message}`)
+      setFormError(`Could not read file: ${describeError(err)}`)
       setFile(null)
     } finally {
       setIsLoadingColumns(false)
@@ -121,6 +136,10 @@ function App() {
       setFormError('Please fill in all fields and select a file.')
       return
     }
+
+    // Guards against rapid double-clicks creating duplicate jobs
+    // while the first request is still in flight.
+    if (isSubmitting) return
 
     setIsSubmitting(true)
     setFormError(null)
@@ -146,7 +165,7 @@ function App() {
 
       setJobId(data.id)
     } catch (err) {
-      setFormError(err.message)
+      setFormError(describeError(err))
     } finally {
       setIsSubmitting(false)
     }
@@ -156,9 +175,17 @@ function App() {
   const handleCancel = async () => {
     if (!jobId) return
     try {
-      await fetch(`${API_BASE}/jobs/${jobId}/cancel/`, { method: 'POST' })
+      const response = await fetch(`${API_BASE}/jobs/${jobId}/cancel/`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || 'Could not cancel job')
+      }
     } catch (err) {
-      console.error('Cancel error:', err)
+      // Surface this rather than swallowing it — a failed cancel
+      // attempt is something the user should know about.
+      setJobError(`Cancel failed: ${describeError(err)}`)
     }
   }
 
@@ -234,13 +261,31 @@ function App() {
 
     const { rows, columns, total_rows, total_pages, page } = results
 
+    // Empty-file case — job succeeded but there's genuinely nothing
+    // to show. Distinct from an error: nothing went wrong here.
+    if (total_rows === 0) {
+      return (
+        <div style={{
+          marginTop: '2rem',
+          padding: '1.5rem',
+          textAlign: 'center',
+          color: '#888',
+          border: '1px dashed #ccc',
+          borderRadius: '8px'
+        }}>
+          <p style={{ margin: 0 }}>
+            The job completed successfully, but the source file has no data rows.
+          </p>
+        </div>
+      )
+    }
+
     return (
       <div style={{ marginTop: '2rem' }}>
         <h3>
           Results — {total_rows.toLocaleString()} rows total
         </h3>
 
-        {/* Pagination controls */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -268,7 +313,6 @@ function App() {
 
         {isLoadingResults && <p>Loading...</p>}
 
-        {/* Data table */}
         {rows.length === 0 ? (
           <p style={{ color: '#888' }}>No rows found on this page.</p>
         ) : (

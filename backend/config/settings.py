@@ -55,6 +55,9 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+REST_FRAMEWORK = {
+    'EXCEPTION_HANDLER': 'apps.jobs.exception_handler.custom_exception_handler',
+}
 ROOT_URLCONF = "config.urls"
 
 GEMINI_API_KEY = config('GEMINI_API_KEY')

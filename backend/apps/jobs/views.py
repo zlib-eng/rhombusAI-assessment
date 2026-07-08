@@ -64,8 +64,18 @@ class JobResultsView(APIView):
             end = start + self.PAGE_SIZE
             page_df = df.iloc[start:end]
 
-            # Replace NaN with None so it serialises to JSON null
-            rows = page_df.where(pd.notnull(page_df), None).to_dict(orient='records')
+            # Convert to plain dicts FIRST, then clean NaN per-value. Doing the
+            # NaN replacement while data is still a DataFrame (the previous
+            # approach) silently fails for numeric columns — pandas coerces None
+            # back into NaN when assigned into a float64 column, since every
+            # value in a numpy column must share one dtype. Once converted to a
+            # list of dicts, each value is a plain Python scalar with no such
+            # constraint, so None can be swapped in reliably for any dtype.
+            raw_rows = page_df.to_dict(orient='records')
+            rows = [
+                {k: (None if pd.isna(v) else v) for k, v in record.items()}
+                for record in raw_rows
+            ]
 
             return Response({
                 'rows': rows,
@@ -153,14 +163,8 @@ class JobStatusView(APIView):
             'error_message': job.error_message,
         })
 
+
 class FileColumnsView(APIView):
-    """
-    POST /api/jobs/columns/
-    Accepts a file, reads only the header row,
-    returns the column names as a list.
-    Used by React to populate the column dropdown
-    before the user submits the full job.
-    """
     def post(self, request):
         file = request.FILES.get('file')
         if not file:
@@ -178,27 +182,59 @@ class FileColumnsView(APIView):
 
         try:
             if file_extension == '.csv':
-                # Read only the first row — nrows=0 gives headers only
                 df = pd.read_csv(file, nrows=0)
             else:
                 df = pd.read_excel(file, nrows=0)
 
-            columns = df.columns.tolist()
+            all_columns = df.columns.tolist()
 
-            if not columns:
+            if not all_columns:
                 return Response(
                     {'error': 'File appears to have no columns'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            return Response({'columns': columns})
+            # Pandas auto-names blank header cells "Unnamed: N". Spark's
+            # CSV reader names the same blank cells completely differently
+            # (_c0, _c1...), so selecting a column under its pandas name
+            # would silently fail once the file reaches PySpark.
+            #
+            # Rather than reject the whole file — too aggressive when
+            # only a few trailing columns are blank, a common artifact
+            # of spreadsheet exports with stray trailing commas — we
+            # exclude just the unnamed columns from the selectable list.
+            # The file is still usable via its properly-named columns.
+            named_columns = [c for c in all_columns if not str(c).startswith('Unnamed:')]
+            excluded_count = len(all_columns) - len(named_columns)
+
+            if not named_columns:
+                # Every column is unnamed — no usable header at all
+                # (e.g. a blank row sitting above the real header row).
+                # Nothing salvageable; reject outright.
+                return Response(
+                    {'error': (
+                        'This file has no valid column headers — the '
+                        'first row appears to be blank or malformed. '
+                        'Please check that the first row contains proper '
+                        'column names, then re-upload.'
+                    )},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            response_data = {'columns': named_columns}
+            if excluded_count > 0:
+                response_data['warning'] = (
+                    f'{excluded_count} column(s) with blank headers were '
+                    'excluded from selection.'
+                )
+
+            return Response(response_data)
 
         except Exception as e:
             return Response(
                 {'error': f'Could not read file: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
 
 class JobCreateView(APIView):
     """
@@ -231,6 +267,14 @@ class JobCreateView(APIView):
         if file_extension not in allowed_extensions:
             return Response(
                 {'error': f'Unsupported file type: {file_extension}. Please upload a CSV or Excel file.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500MB — adjust to whatever you've tested
+
+        if file.size > MAX_FILE_SIZE_BYTES:
+            return Response(
+                {'error': f'File too large ({file.size / 1024 / 1024:.1f}MB). Maximum allowed is {MAX_FILE_SIZE_BYTES / 1024 / 1024:.0f}MB.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 

@@ -44,6 +44,7 @@ def process_file_task(self, job_id):
             read_file,
             apply_regex_transformation,
             write_output,
+            ColumnNotFoundError,
         )
 
         spark = get_spark_session()
@@ -63,8 +64,8 @@ def process_file_task(self, job_id):
         try:
             pattern = get_regex_pattern(job.nl_prompt)
         except RegexGenerationError as e:
-            # This is a permanent failure — the prompt produced an
-            # unusable pattern. Retrying won't help, so fail immediately
+            # Permanent failure — the prompt produced an unusable
+            # pattern. Retrying won't help, so fail immediately
             # instead of going through the retry/backoff cycle.
             logger.error(f"Job {job_id}: regex generation failed — {e}")
             job.status = Job.Status.FAILED
@@ -83,12 +84,23 @@ def process_file_task(self, job_id):
             logger.info(f"Job {job_id} cancelled before transformation")
             return
 
-        df_transformed = apply_regex_transformation(
-            df,
-            job.target_column,
-            pattern,
-            job.replacement_value,
-        )
+        try:
+            df_transformed = apply_regex_transformation(
+                df,
+                job.target_column,
+                pattern,
+                job.replacement_value,
+            )
+        except ColumnNotFoundError as e:
+            # Also a permanent failure — the column will never exist
+            # no matter how many times we retry the same job. Fail
+            # immediately rather than burning through backoff delays
+            # (5s, 25s, 125s) on a guaranteed repeat failure.
+            logger.error(f"Job {job_id}: column error — {e}")
+            job.status = Job.Status.FAILED
+            job.error_message = str(e)
+            job.save(update_fields=['status', 'error_message', 'updated_at'])
+            return
 
         # ── Stage 4: Write output ────────────────────────────────
         _update_progress(self, job, 85)

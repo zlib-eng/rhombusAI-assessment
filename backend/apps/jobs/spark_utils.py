@@ -3,6 +3,16 @@ import pandas as pd
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import regexp_replace, col
 
+class ColumnNotFoundError(ValueError):
+    """
+    Raised when the target column doesn't exist in the file as Spark
+    reads it. This is a permanent, deterministic failure — retrying
+    the same job will produce the exact same error every time, so it
+    should fail immediately rather than go through retry/backoff.
+    """
+    pass
+
+
 
 def get_spark_session():
     """
@@ -63,17 +73,9 @@ def read_file(spark, file_path):
 
 
 def apply_regex_transformation(df, target_column, pattern, replacement):
-    """
-    Applies regexp_replace across the target column using a native
-    Spark function. This is vectorized — Spark distributes the work
-    across partitions automatically. We are not iterating row by row.
-
-    This is the key distinction the assessment is testing:
-    native Spark functions vs Python UDFs (which would be row-by-row).
-    """
     if target_column not in df.columns:
         available = ", ".join(df.columns)
-        raise ValueError(
+        raise ColumnNotFoundError(
             f"Column '{target_column}' not found in file. "
             f"Available columns: {available}"
         )
@@ -82,7 +84,6 @@ def apply_regex_transformation(df, target_column, pattern, replacement):
         target_column,
         regexp_replace(col(target_column), pattern, replacement)
     )
-
 
 def write_output(df, output_path):
     """
