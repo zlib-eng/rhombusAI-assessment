@@ -1,0 +1,418 @@
+/* ─────────────────────────────────────────────────────────────
+   Design tokens — single source of truth for the visual system.
+   Instrument-panel direction: dark ink surfaces, one semantic
+   accent per state, mono type for data, Inter for prose.
+   ───────────────────────────────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap');
+
+:root {
+  /* Surfaces */
+  --ink-0: #101318;      /* page background */
+  --ink-1: #181d24;      /* raised panel */
+  --ink-2: #212832;      /* inputs, table stripes */
+  --ink-3: #2c3542;      /* borders, dividers */
+
+  /* Text */
+  --text-1: #e8ecf1;     /* primary */
+  --text-2: #9aa5b1;     /* secondary, labels */
+  --text-3: #5c6673;     /* muted, placeholders */
+
+  /* Semantic state colors — accent is ONLY ever state, never decoration */
+  --state-live: #3ecfb2;     /* running / success / focus */
+  --state-warn: #e8a33d;     /* warnings, cancelled */
+  --state-fail: #e06056;     /* failures */
+
+  /* Type */
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-body: 'Inter', system-ui, sans-serif;
+
+  /* Spacing scale */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+  --sp-7: 3rem;
+
+  --radius: 6px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--ink-0);
+  color: var(--text-1);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* ── App shell ─────────────────────────────────────────────── */
+
+.app-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--sp-6) var(--sp-5) var(--sp-7);
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-6);
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--ink-3);
+}
+
+.app-header h1 {
+  font-family: var(--font-mono);
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.app-header .tagline {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ── Fieldset groups — structure encodes the pipeline ──────── */
+
+.field-group {
+  background: var(--ink-1);
+  border: 1px solid var(--ink-3);
+  border-radius: var(--radius);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-4);
+}
+
+.field-group__legend {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin: 0 0 var(--sp-4);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.field-group__legend::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--ink-3);
+}
+
+.field {
+  margin-bottom: var(--sp-4);
+}
+.field:last-child { margin-bottom: 0; }
+
+.field label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-2);
+  margin-bottom: var(--sp-2);
+}
+
+.field input[type="text"],
+.field select {
+  width: 100%;
+  padding: var(--sp-3);
+  background: var(--ink-2);
+  border: 1px solid var(--ink-3);
+  border-radius: var(--radius);
+  color: var(--text-1);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  transition: border-color 120ms ease;
+}
+
+.field input[type="file"] {
+  color: var(--text-2);
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+}
+
+.field input:focus-visible,
+.field select:focus-visible {
+  outline: none;
+  border-color: var(--state-live);
+}
+
+.field input::placeholder { color: var(--text-3); }
+
+.field .hint {
+  font-size: 0.75rem;
+  color: var(--text-3);
+  margin-top: var(--sp-1);
+}
+
+/* ── Buttons ───────────────────────────────────────────────── */
+
+.btn {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: opacity 120ms ease, border-color 120ms ease;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--state-live);
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--state-live);
+  color: var(--ink-0);
+  width: 100%;
+}
+.btn--primary:not(:disabled):hover { opacity: 0.9; }
+
+.btn--danger {
+  background: transparent;
+  color: var(--state-fail);
+  border-color: var(--state-fail);
+}
+.btn--danger:not(:disabled):hover { background: rgba(224, 96, 86, 0.1); }
+
+.btn--ghost {
+  background: var(--ink-2);
+  color: var(--text-1);
+  border-color: var(--ink-3);
+}
+.btn--ghost:not(:disabled):hover { border-color: var(--text-3); }
+
+/* ── Banner (form-level errors and warnings) ───────────────── */
+
+.banner {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  margin-top: var(--sp-4);
+  border: 1px solid;
+}
+
+.banner--error {
+  color: var(--state-fail);
+  border-color: rgba(224, 96, 86, 0.4);
+  background: rgba(224, 96, 86, 0.07);
+}
+
+.banner--warn {
+  color: var(--state-warn);
+  border-color: rgba(232, 163, 61, 0.4);
+  background: rgba(232, 163, 61, 0.07);
+}
+
+/* ── Job panel + status strip (signature element) ──────────── */
+
+.job-panel {
+  background: var(--ink-1);
+  border: 1px solid var(--ink-3);
+  border-radius: var(--radius);
+  margin-top: var(--sp-5);
+  overflow: hidden;
+}
+
+.status-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-left: 3px solid var(--ink-3);
+  background: var(--ink-2);
+}
+
+.status-strip--running,
+.status-strip--queued   { border-left-color: var(--state-live); }
+.status-strip--success  { border-left-color: var(--state-live); }
+.status-strip--failed   { border-left-color: var(--state-fail); }
+.status-strip--cancelled{ border-left-color: var(--state-warn); }
+
+.status-strip__label {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  min-width: 7.5rem;
+}
+
+.status-strip--running .status-strip__label,
+.status-strip--queued .status-strip__label,
+.status-strip--success .status-strip__label { color: var(--state-live); }
+.status-strip--failed .status-strip__label { color: var(--state-fail); }
+.status-strip--cancelled .status-strip__label { color: var(--state-warn); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.status-strip--running .status-strip__label,
+.status-strip--queued .status-strip__label {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-strip--running .status-strip__label,
+  .status-strip--queued .status-strip__label { animation: none; }
+}
+
+.status-strip__bar {
+  flex: 1;
+  height: 6px;
+  background: var(--ink-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.status-strip__bar-fill {
+  height: 100%;
+  background: var(--state-live);
+  transition: width 300ms ease;
+}
+
+.status-strip--failed .status-strip__bar-fill { background: var(--state-fail); }
+.status-strip--cancelled .status-strip__bar-fill { background: var(--state-warn); }
+
+.status-strip__pct {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-2);
+  min-width: 3rem;
+  text-align: right;
+}
+
+.job-panel__body {
+  padding: var(--sp-4) var(--sp-5);
+}
+
+.job-panel__meta {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-3);
+  margin-bottom: var(--sp-3);
+  word-break: break-all;
+}
+
+.job-panel__error {
+  color: var(--state-fail);
+  font-size: 0.85rem;
+  margin-top: var(--sp-3);
+}
+
+.job-panel__note {
+  color: var(--text-2);
+  font-size: 0.85rem;
+  margin-top: var(--sp-3);
+}
+
+/* ── Results table ─────────────────────────────────────────── */
+
+.results {
+  margin-top: var(--sp-6);
+}
+
+.results__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.results__count {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-2);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.pagination__page {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--ink-3);
+  border-radius: var(--radius);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+thead th {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  text-align: left;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--ink-2);
+  border-bottom: 1px solid var(--ink-3);
+  white-space: nowrap;
+}
+
+tbody td {
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--ink-2);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+}
+
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.015); }
+
+td .null {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.empty-state {
+  margin-top: var(--sp-5);
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--text-3);
+  border: 1px dashed var(--ink-3);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
